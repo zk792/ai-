@@ -2,8 +2,18 @@
 import { StockData, KLinePoint } from '../types';
 
 const SANHU_TOKEN = 'ecee261e1f54aaeee1142a5491a71807';
-const SANHU_BASE_URL_REALTIME = 'http://www.sanhulianghua.com:2008/v1/hsa_fenshi';
-const SANHU_BASE_URL_KLINE = 'http://www.sanhulianghua.com:2008/v1/hsa_rixian';
+
+// In production (deployed), we use a relative path so Nginx can proxy it.
+// In development, we use the direct URL (or you can use a Vite proxy).
+const IS_PROD = process.env.NODE_ENV === 'production';
+
+// If deployed, request /api/proxy/v1/... -> Nginx will forward to http://www.sanhulianghua.com:2008/v1/...
+const BASE_URL = IS_PROD 
+  ? '/api/proxy' 
+  : 'http://www.sanhulianghua.com:2008';
+
+const SANHU_BASE_URL_REALTIME = `${BASE_URL}/v1/hsa_fenshi`;
+const SANHU_BASE_URL_KLINE = `${BASE_URL}/v1/hsa_rixian`;
 
 // Helper to calculate moving averages
 function calculateMAs(data: KLinePoint[]) {
@@ -93,8 +103,7 @@ function calculateRSI(data: KLinePoint[]) {
 // 1. Real-Time Data (Minute Level Snapshot)
 export async function fetchSanhuRealtime(ticker: string): Promise<StockData | null> {
   try {
-    // API: http://www.sanhulianghua.com:2008/v1/hsa_fenshi
-    // Using simple=1 to hopefully get lighter data, but we take the last element for latest status
+    // URL will be relative in prod: /api/proxy/v1/hsa_fenshi...
     const url = `${SANHU_BASE_URL_REALTIME}?token=${SANHU_TOKEN}&code=${ticker}&all=1&simple=1`;
     
     const response = await fetch(url);
@@ -109,22 +118,15 @@ export async function fetchSanhuRealtime(ticker: string): Promise<StockData | nu
 
     let snapshot: any = null;
 
-    // The 'data' field is likely an array of minute ticks. We want the LATEST tick.
     if (Array.isArray(json.data) && json.data.length > 0) {
       snapshot = json.data[json.data.length - 1];
     } else if (typeof json.data === 'object' && json.data !== null) {
-      // Fallback if simple=1 returns a single object
       snapshot = json.data;
     } else {
       return null;
     }
     
     if (!snapshot) return null;
-
-    // Unit Conversions:
-    // Prices (JiaGe, KaiPan, etc): Unit 0.1 cents (0.001 Yuan)
-    // Percentages (ZhangFu, HuanShou): Unit 0.001%
-    // MarketCap (ShiZhi): Unit Wan (10,000)
 
     const price = (snapshot.JiaGe || 0) * 0.001;
     const changePercent = (snapshot.ZhangFu || 0) * 0.001;
@@ -133,7 +135,6 @@ export async function fetchSanhuRealtime(ticker: string): Promise<StockData | nu
     const high = (snapshot.ZuiGao || 0) * 0.001;
     const low = (snapshot.ZuiDi || 0) * 0.001;
     
-    // Top level usually contains the stock name
     const name = json.stock_name || ticker;
 
     return {
@@ -145,7 +146,7 @@ export async function fetchSanhuRealtime(ticker: string): Promise<StockData | nu
       open: Number(open.toFixed(2)),
       high: Number(high.toFixed(2)),
       low: Number(low.toFixed(2)),
-      volume: snapshot.ZongLiang || 0, // Volume in 'Shou' (Hands) or raw? Usually accumulated.
+      volume: snapshot.ZongLiang || 0,
       turnoverRate: Number(((snapshot.HuanShou || 0) * 0.001).toFixed(2)),
       pe: Number(((snapshot.ShiYingLv || 0) * 0.001).toFixed(2)),
       marketCap: (snapshot.ShiZhi || 0) * 10000 
@@ -160,8 +161,7 @@ export async function fetchSanhuRealtime(ticker: string): Promise<StockData | nu
 // 2. Historical Daily K-Line Data
 export async function fetchSanhuKLine(ticker: string): Promise<KLinePoint[]> {
   try {
-    // API: http://www.sanhulianghua.com:2008/v1/hsa_rixian
-    // all=0 means get latest 100 records (default)
+    // URL will be relative in prod: /api/proxy/v1/hsa_rixian...
     const url = `${SANHU_BASE_URL_KLINE}?token=${SANHU_TOKEN}&code=${ticker}&all=0`;
     
     const response = await fetch(url);
@@ -174,9 +174,6 @@ export async function fetchSanhuKLine(ticker: string): Promise<KLinePoint[]> {
         return [];
     }
 
-    // Parse Data
-    // RiQi (Date), KaiPan (Open), ZuiGao (High), ZuiDi (Low), ShouPan (Close), ZongLiang (Vol)
-    // Prices are * 0.001
     const klineData: KLinePoint[] = json.data.map((item: any) => ({
       date: item.RiQi,
       open: Number((item.KaiPan * 0.001).toFixed(2)),
@@ -189,10 +186,8 @@ export async function fetchSanhuKLine(ticker: string): Promise<KLinePoint[]> {
       ma20: 0
     }));
 
-    // Sort by date ascending to be safe
     klineData.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    // Apply Calculations
     calculateMAs(klineData);
     calculateKDJ(klineData);
     calculateRSI(klineData);
@@ -205,7 +200,6 @@ export async function fetchSanhuKLine(ticker: string): Promise<KLinePoint[]> {
   }
 }
 
-// Keep Mairui as a backup if strictly needed, but Sanhu seems complete now.
 export async function fetchMairuiKLine(ticker: string): Promise<KLinePoint[]> {
     return [];
 }
