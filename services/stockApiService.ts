@@ -15,6 +15,81 @@ function calculateMAs(data: KLinePoint[]) {
   return data;
 }
 
+// Calculate KDJ (9, 3, 3)
+function calculateKDJ(data: KLinePoint[]) {
+  let k = 50;
+  let d = 50;
+
+  for (let i = 0; i < data.length; i++) {
+    const period = 9;
+    const start = Math.max(0, i - period + 1);
+    const window = data.slice(start, i + 1);
+    
+    let low9 = window[0].low;
+    let high9 = window[0].high;
+    
+    window.forEach(p => {
+      if (p.low < low9) low9 = p.low;
+      if (p.high > high9) high9 = p.high;
+    });
+
+    const close = data[i].close;
+    let rsv = 50;
+    
+    if (high9 !== low9) {
+      rsv = ((close - low9) / (high9 - low9)) * 100;
+    }
+
+    // Standard parameters: 2/3 previous + 1/3 current
+    k = (2/3) * k + (1/3) * rsv;
+    d = (2/3) * d + (1/3) * k;
+    const j = 3 * k - 2 * d;
+
+    data[i].k = Number(k.toFixed(2));
+    data[i].d = Number(d.toFixed(2));
+    data[i].j = Number(j.toFixed(2));
+  }
+  return data;
+}
+
+// Calculate RSI (14)
+function calculateRSI(data: KLinePoint[]) {
+  const period = 14;
+  if (data.length < period) return data;
+
+  let gains = 0;
+  let losses = 0;
+
+  // Initial average gain/loss
+  for (let i = 1; i <= period; i++) {
+    const change = data[i].close - data[i - 1].close;
+    if (change > 0) gains += change;
+    else losses += Math.abs(change);
+  }
+
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+
+  // First RSI
+  let rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+  data[period].rsi = Number((100 - (100 / (1 + rs))).toFixed(2));
+
+  // Smoothed RSI for rest
+  for (let i = period + 1; i < data.length; i++) {
+    const change = data[i].close - data[i - 1].close;
+    const gain = change > 0 ? change : 0;
+    const loss = change < 0 ? Math.abs(change) : 0;
+
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+
+    rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+    data[i].rsi = Number((100 - (100 / (1 + rs))).toFixed(2));
+  }
+
+  return data;
+}
+
 // 1. Real-Time Data (Minute Level Snapshot)
 export async function fetchSanhuRealtime(ticker: string): Promise<StockData | null> {
   try {
@@ -117,7 +192,12 @@ export async function fetchSanhuKLine(ticker: string): Promise<KLinePoint[]> {
     // Sort by date ascending to be safe
     klineData.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    return calculateMAs(klineData);
+    // Apply Calculations
+    calculateMAs(klineData);
+    calculateKDJ(klineData);
+    calculateRSI(klineData);
+
+    return klineData;
 
   } catch (error) {
     console.warn("Sanhu KLine API failed:", error);

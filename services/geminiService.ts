@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { RealTimeDataResult, WebSource, StockData, KLinePoint } from '../types';
+import { RealTimeDataResult, WebSource, StockData, KLinePoint, TechnicalIndicators } from '../types';
 
 const getClient = () => {
   const apiKey = process.env.API_KEY;
@@ -9,8 +9,7 @@ const getClient = () => {
 };
 
 // Helper: Generate a fallback result when AI fails (e.g. 429 Quota Exceeded)
-// This ensures the UI still shows the Stock/Chart data from Sanhu API even if AI is dead.
-const getFallbackResult = (stock: StockData, errorMsg: string): RealTimeDataResult => {
+const getFallbackResult = (stock: StockData, errorMsg: string, calculatedTechnical?: TechnicalIndicators): RealTimeDataResult => {
   return {
     stock: stock,
     history: [],
@@ -27,10 +26,10 @@ const getFallbackResult = (stock: StockData, errorMsg: string): RealTimeDataResu
       retailInflow: 0,
       sectorRank: 0
     },
-    technical: {
-      rsi: 0,
+    technical: calculatedTechnical || {
+      rsi: 50,
       macd: { dif: 0, dea: 0, macd: 0 },
-      kdj: { k: 0, d: 0, j: 0 }
+      kdj: { k: 50, d: 50, j: 50 }
     },
     analysis: {
       action: 'HOLD',
@@ -103,11 +102,32 @@ async function parseSearchDataToJSON(ticker: string, searchText: string, ai: Goo
 
 // NEW: Analyze SPECIFIC data provided by API (High Accuracy Mode)
 export async function analyzeProvidedStockData(stock: StockData, kline: KLinePoint[]): Promise<RealTimeDataResult> {
+  // Extract calculated technicals from the last K-Line point
+  let calculatedKDJ = null;
+  let calculatedRSI = null;
+  let calculatedTechnical: TechnicalIndicators | undefined = undefined;
+
+  if (kline.length > 0) {
+    const lastPoint = kline[kline.length - 1];
+    if (typeof lastPoint.k === 'number' && typeof lastPoint.d === 'number' && typeof lastPoint.j === 'number') {
+       calculatedKDJ = { k: lastPoint.k, d: lastPoint.d, j: lastPoint.j };
+    }
+    if (typeof lastPoint.rsi === 'number') {
+       calculatedRSI = lastPoint.rsi;
+    }
+    
+    // Construct the definitive technical object to use in fallback or override
+    calculatedTechnical = {
+       rsi: lastPoint.rsi || 50,
+       kdj: { k: lastPoint.k || 50, d: lastPoint.d || 50, j: lastPoint.j || 50 },
+       macd: { dif: 0, dea: 0, macd: 0 } // MACD not calculated locally yet
+    };
+  }
+
   try {
     const ai = getClient();
     
     // Calculate basic indicators for the prompt
-    const lastClose = stock.price;
     const last5Days = kline.slice(-5).map(k => k.close);
     
     const prompt = `
@@ -121,14 +141,18 @@ export async function analyzeProvidedStockData(stock: StockData, kline: KLinePoi
       - 市盈率: ${stock.pe}
       - 近期走势 (5日): ${JSON.stringify(last5Days)}
       
+      **真实计算的技术指标** (请务必基于这些数值分析):
+      - KDJ (9,3,3): K=${calculatedKDJ?.k}, D=${calculatedKDJ?.d}, J=${calculatedKDJ?.j}
+      - RSI (14): ${calculatedRSI}
+      
       **任务**:
-      1. **技术分析**: 基于价格和走势，分析当前是处于支撑位还是压力位。
+      1. **技术分析**: 结合上述真实的KDJ和RSI数值，分析当前是超买还是超卖，是否有金叉/死叉信号。
       2. **量化建议**: 给出明确的 BUY (买入), SELL (卖出), 或 HOLD (观望) 建议。
       3. **目标点位**: 预测短期的上方压力位 (Target High) 和 下方支撑位 (Target Low)。
       4. **风险提示**: 列出3点关键风险。
-      5. **资金/情绪估算**: 请根据股票近期的涨跌幅和换手率，估算（生成）合理的市场情绪分数（0-100）、主力资金流向和技术指标（RSI, KDJ）。
+      5. **资金/情绪估算**: 请根据股票近期的涨跌幅和换手率，估算（生成）合理的市场情绪分数（0-100）、主力资金流向。
       
-      请严格按照JSON格式输出，不要包含Markdown代码块。
+      请严格按照JSON格式输出，不要包含Markdown代码块。输出的technical字段必须包含上述提供的真实KDJ和RSI数值。
     `;
 
     const response = await ai.models.generateContent({
@@ -142,8 +166,13 @@ export async function analyzeProvidedStockData(stock: StockData, kline: KLinePoi
 
     const result = parseResponse(response.text, stock.symbol);
     
-    // Override the inferred stock data with the REAL API data to ensure accuracy
+    // Override with REAL data to ensure accuracy
     result.stock = stock;
+    if (calculatedTechnical) {
+      result.technical.kdj = calculatedTechnical.kdj;
+      result.technical.rsi = calculatedTechnical.rsi;
+      // Keep AI's MACD guess or set to 0 if we don't calculate it
+    }
     
     return result;
 
@@ -156,7 +185,7 @@ export async function analyzeProvidedStockData(stock: StockData, kline: KLinePoi
     }
 
     // Return the safe fallback so the app doesn't crash
-    return getFallbackResult(stock, errorMsg);
+    return getFallbackResult(stock, errorMsg, calculatedTechnical);
   }
 }
 

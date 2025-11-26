@@ -24,6 +24,10 @@ export interface KLinePoint {
   ma5: number;
   ma10: number;
   ma20: number;
+  k?: number;
+  d?: number;
+  j?: number;
+  rsi?: number;
 }
 
 export interface SentimentData {
