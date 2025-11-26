@@ -1,0 +1,131 @@
+
+import { StockData, KLinePoint } from '../types';
+
+const SANHU_TOKEN = 'ecee261e1f54aaeee1142a5491a71807';
+const SANHU_BASE_URL_REALTIME = 'http://www.sanhulianghua.com:2008/v1/hsa_fenshi';
+const SANHU_BASE_URL_KLINE = 'http://www.sanhulianghua.com:2008/v1/hsa_rixian';
+
+// Helper to calculate moving averages
+function calculateMAs(data: KLinePoint[]) {
+  for (let i = 0; i < data.length; i++) {
+    if (i >= 4) data[i].ma5 = data.slice(i - 4, i + 1).reduce((sum, item) => sum + item.close, 0) / 5;
+    if (i >= 9) data[i].ma10 = data.slice(i - 9, i + 1).reduce((sum, item) => sum + item.close, 0) / 10;
+    if (i >= 19) data[i].ma20 = data.slice(i - 19, i + 1).reduce((sum, item) => sum + item.close, 0) / 20;
+  }
+  return data;
+}
+
+// 1. Real-Time Data (Minute Level Snapshot)
+export async function fetchSanhuRealtime(ticker: string): Promise<StockData | null> {
+  try {
+    // API: http://www.sanhulianghua.com:2008/v1/hsa_fenshi
+    // Using simple=1 to hopefully get lighter data, but we take the last element for latest status
+    const url = `${SANHU_BASE_URL_REALTIME}?token=${SANHU_TOKEN}&code=${ticker}&all=1&simple=1`;
+    
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('Sanhu Realtime API response not ok');
+    
+    const json = await response.json();
+    
+    if (json.ret !== 200) {
+       console.warn("Sanhu API returned error:", json);
+       return null;
+    }
+
+    let snapshot: any = null;
+
+    // The 'data' field is likely an array of minute ticks. We want the LATEST tick.
+    if (Array.isArray(json.data) && json.data.length > 0) {
+      snapshot = json.data[json.data.length - 1];
+    } else if (typeof json.data === 'object' && json.data !== null) {
+      // Fallback if simple=1 returns a single object
+      snapshot = json.data;
+    } else {
+      return null;
+    }
+    
+    if (!snapshot) return null;
+
+    // Unit Conversions:
+    // Prices (JiaGe, KaiPan, etc): Unit 0.1 cents (0.001 Yuan)
+    // Percentages (ZhangFu, HuanShou): Unit 0.001%
+    // MarketCap (ShiZhi): Unit Wan (10,000)
+
+    const price = (snapshot.JiaGe || 0) * 0.001;
+    const changePercent = (snapshot.ZhangFu || 0) * 0.001;
+    const changeAmount = price * (changePercent / 100); 
+    const open = (snapshot.KaiPan || 0) * 0.001;
+    const high = (snapshot.ZuiGao || 0) * 0.001;
+    const low = (snapshot.ZuiDi || 0) * 0.001;
+    
+    // Top level usually contains the stock name
+    const name = json.stock_name || ticker;
+
+    return {
+      symbol: ticker,
+      name: name,
+      price: Number(price.toFixed(2)),
+      change: Number(changeAmount.toFixed(2)),
+      changePercent: Number(changePercent.toFixed(2)),
+      open: Number(open.toFixed(2)),
+      high: Number(high.toFixed(2)),
+      low: Number(low.toFixed(2)),
+      volume: snapshot.ZongLiang || 0, // Volume in 'Shou' (Hands) or raw? Usually accumulated.
+      turnoverRate: Number(((snapshot.HuanShou || 0) * 0.001).toFixed(2)),
+      pe: Number(((snapshot.ShiYingLv || 0) * 0.001).toFixed(2)),
+      marketCap: (snapshot.ShiZhi || 0) * 10000 
+    };
+
+  } catch (error) {
+    console.warn("Sanhu Realtime API failed:", error);
+    return null;
+  }
+}
+
+// 2. Historical Daily K-Line Data
+export async function fetchSanhuKLine(ticker: string): Promise<KLinePoint[]> {
+  try {
+    // API: http://www.sanhulianghua.com:2008/v1/hsa_rixian
+    // all=0 means get latest 100 records (default)
+    const url = `${SANHU_BASE_URL_KLINE}?token=${SANHU_TOKEN}&code=${ticker}&all=0`;
+    
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('Sanhu KLine API response not ok');
+    
+    const json = await response.json();
+    
+    if (json.ret !== 200 || !json.data || !Array.isArray(json.data)) {
+        console.warn("Sanhu KLine API returned invalid data", json);
+        return [];
+    }
+
+    // Parse Data
+    // RiQi (Date), KaiPan (Open), ZuiGao (High), ZuiDi (Low), ShouPan (Close), ZongLiang (Vol)
+    // Prices are * 0.001
+    const klineData: KLinePoint[] = json.data.map((item: any) => ({
+      date: item.RiQi,
+      open: Number((item.KaiPan * 0.001).toFixed(2)),
+      high: Number((item.ZuiGao * 0.001).toFixed(2)),
+      low: Number((item.ZuiDi * 0.001).toFixed(2)),
+      close: Number((item.ShouPan * 0.001).toFixed(2)),
+      volume: item.ZongLiang,
+      ma5: 0,
+      ma10: 0,
+      ma20: 0
+    }));
+
+    // Sort by date ascending to be safe
+    klineData.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    return calculateMAs(klineData);
+
+  } catch (error) {
+    console.warn("Sanhu KLine API failed:", error);
+    return [];
+  }
+}
+
+// Keep Mairui as a backup if strictly needed, but Sanhu seems complete now.
+export async function fetchMairuiKLine(ticker: string): Promise<KLinePoint[]> {
+    return [];
+}
