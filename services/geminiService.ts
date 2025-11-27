@@ -1,11 +1,31 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { RealTimeDataResult, WebSource, StockData, KLinePoint, TechnicalIndicators } from '../types';
 
 const getClient = () => {
-  // Safe access to process.env for browser environments
-  const apiKey = (typeof process !== 'undefined' && process.env) ? process.env.API_KEY : '';
-  if (!apiKey) throw new Error("API_KEY not found in environment");
+  let apiKey = '';
+  
+  // 1. Try Vite environment variable (Best for production/Vercel/Netlify)
+  // @ts-ignore
+  if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_KEY) {
+    // @ts-ignore
+    apiKey = import.meta.env.VITE_API_KEY;
+  }
+  
+  // 2. Fallback to process.env (Best for older bundlers/Node)
+  if (!apiKey && typeof process !== 'undefined' && process.env && process.env.API_KEY) {
+    apiKey = process.env.API_KEY;
+  }
+
+  // 3. Temporary Fallback (Only if you are testing locally and env vars fail)
+  // if (!apiKey) apiKey = "YOUR_HARDCODED_KEY_FOR_TESTING"; 
+
+  if (!apiKey) {
+    console.warn("API_KEY not found. AI features will be disabled.");
+    // Return a dummy object or throw a handled error? 
+    // We throw here, and let the caller catch it to show the fallback UI.
+    throw new Error("API_KEY not found");
+  }
+  
   return new GoogleGenAI({ apiKey });
 };
 
