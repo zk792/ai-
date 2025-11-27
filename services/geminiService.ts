@@ -3,7 +3,8 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { RealTimeDataResult, WebSource, StockData, KLinePoint, TechnicalIndicators } from '../types';
 
 const getClient = () => {
-  const apiKey = process.env.API_KEY;
+  // Safe access to process.env for browser environments
+  const apiKey = (typeof process !== 'undefined' && process.env) ? process.env.API_KEY : '';
   if (!apiKey) throw new Error("API_KEY not found in environment");
   return new GoogleGenAI({ apiKey });
 };

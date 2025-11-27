@@ -8,10 +8,19 @@ interface StockChartProps {
 }
 
 const StockChart: React.FC<StockChartProps> = ({ data }) => {
-  if (!data || data.length === 0) {
+  // Safe filter: Remove any points with NaN or Infinity values that crash Recharts
+  const validData = (data || []).filter(item => 
+    isFinite(item.open) && 
+    isFinite(item.close) && 
+    isFinite(item.high) && 
+    isFinite(item.low) && 
+    item.open > 0
+  );
+
+  if (validData.length === 0) {
     return (
       <div className="h-[400px] w-full bg-cardBg rounded-xl p-4 border border-slate-700 shadow-lg flex items-center justify-center text-slate-500">
-        暂无走势数据
+        暂无有效走势数据 (数据源为空或无效)
       </div>
     );
   }
@@ -28,7 +37,7 @@ const StockChart: React.FC<StockChartProps> = ({ data }) => {
       </div>
       
       <ResponsiveContainer width="100%" height="90%">
-        <ComposedChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+        <ComposedChart data={validData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
           <XAxis 
             dataKey="date" 
@@ -57,7 +66,7 @@ const StockChart: React.FC<StockChartProps> = ({ data }) => {
           {/* Candlestick Simulation */}
            <Bar dataKey="close" name="收盘价" barSize={8} isAnimationActive={false}>
             {
-              data.map((entry, index) => (
+              validData.map((entry, index) => (
                 <Cell key={`cell-${index}`} fill={entry.close > entry.open ? '#ef4444' : '#10b981'} />
               ))
             }

@@ -3,17 +3,24 @@ import { StockData, KLinePoint } from '../types';
 
 const SANHU_TOKEN = 'ecee261e1f54aaeee1142a5491a71807';
 
-// In production (deployed), we use a relative path so Nginx can proxy it.
-// In development, we use the direct URL (or you can use a Vite proxy).
-const IS_PROD = process.env.NODE_ENV === 'production';
+// Fix: Avoid accessing 'process' directly as it causes ReferenceError in browser environments without bundlers.
+// Use window.location to detect environment.
+const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
-// If deployed, request /api/proxy/v1/... -> Nginx will forward to http://www.sanhulianghua.com:2008/v1/...
-const BASE_URL = IS_PROD 
-  ? '/api/proxy' 
-  : 'http://www.sanhulianghua.com:2008';
+// If deployed (not local), request /api/proxy/v1/... -> Nginx will forward to http://www.sanhulianghua.com:2008/v1/...
+// If local, use direct URL (requires browser to allow mixed content or CORS extension if API doesn't support CORS)
+const BASE_URL = isLocal 
+  ? 'http://www.sanhulianghua.com:2008' 
+  : '/api/proxy';
 
 const SANHU_BASE_URL_REALTIME = `${BASE_URL}/v1/hsa_fenshi`;
 const SANHU_BASE_URL_KLINE = `${BASE_URL}/v1/hsa_rixian`;
+
+// Helper: Ensure value is a valid number, default to 0 if NaN/Null/Undefined
+function safeFloat(val: any): number {
+  const num = parseFloat(val);
+  return isFinite(num) ? num : 0;
+}
 
 // Helper to calculate moving averages
 function calculateMAs(data: KLinePoint[]) {
@@ -103,8 +110,8 @@ function calculateRSI(data: KLinePoint[]) {
 // 1. Real-Time Data (Minute Level Snapshot)
 export async function fetchSanhuRealtime(ticker: string): Promise<StockData | null> {
   try {
-    // URL will be relative in prod: /api/proxy/v1/hsa_fenshi...
     const url = `${SANHU_BASE_URL_REALTIME}?token=${SANHU_TOKEN}&code=${ticker}&all=1&simple=1`;
+    console.log("Fetching Realtime:", url);
     
     const response = await fetch(url);
     if (!response.ok) throw new Error('Sanhu Realtime API response not ok');
@@ -128,12 +135,17 @@ export async function fetchSanhuRealtime(ticker: string): Promise<StockData | nu
     
     if (!snapshot) return null;
 
-    const price = (snapshot.JiaGe || 0) * 0.001;
-    const changePercent = (snapshot.ZhangFu || 0) * 0.001;
+    // Use safeFloat to prevent NaNs
+    const price = safeFloat(snapshot.JiaGe) * 0.001;
+    const changePercent = safeFloat(snapshot.ZhangFu) * 0.001;
     const changeAmount = price * (changePercent / 100); 
-    const open = (snapshot.KaiPan || 0) * 0.001;
-    const high = (snapshot.ZuiGao || 0) * 0.001;
-    const low = (snapshot.ZuiDi || 0) * 0.001;
+    const open = safeFloat(snapshot.KaiPan) * 0.001;
+    const high = safeFloat(snapshot.ZuiGao) * 0.001;
+    const low = safeFloat(snapshot.ZuiDi) * 0.001;
+    const volume = safeFloat(snapshot.ZongLiang);
+    const turnoverRate = safeFloat(snapshot.HuanShou) * 0.001;
+    const pe = safeFloat(snapshot.ShiYingLv) * 0.001;
+    const marketCap = safeFloat(snapshot.ShiZhi) * 10000;
     
     const name = json.stock_name || ticker;
 
@@ -146,10 +158,10 @@ export async function fetchSanhuRealtime(ticker: string): Promise<StockData | nu
       open: Number(open.toFixed(2)),
       high: Number(high.toFixed(2)),
       low: Number(low.toFixed(2)),
-      volume: snapshot.ZongLiang || 0,
-      turnoverRate: Number(((snapshot.HuanShou || 0) * 0.001).toFixed(2)),
-      pe: Number(((snapshot.ShiYingLv || 0) * 0.001).toFixed(2)),
-      marketCap: (snapshot.ShiZhi || 0) * 10000 
+      volume: volume,
+      turnoverRate: Number(turnoverRate.toFixed(2)),
+      pe: Number(pe.toFixed(2)),
+      marketCap: marketCap
     };
 
   } catch (error) {
@@ -161,8 +173,8 @@ export async function fetchSanhuRealtime(ticker: string): Promise<StockData | nu
 // 2. Historical Daily K-Line Data
 export async function fetchSanhuKLine(ticker: string): Promise<KLinePoint[]> {
   try {
-    // URL will be relative in prod: /api/proxy/v1/hsa_rixian...
     const url = `${SANHU_BASE_URL_KLINE}?token=${SANHU_TOKEN}&code=${ticker}&all=0`;
+    console.log("Fetching KLine:", url);
     
     const response = await fetch(url);
     if (!response.ok) throw new Error('Sanhu KLine API response not ok');
@@ -176,11 +188,11 @@ export async function fetchSanhuKLine(ticker: string): Promise<KLinePoint[]> {
 
     const klineData: KLinePoint[] = json.data.map((item: any) => ({
       date: item.RiQi,
-      open: Number((item.KaiPan * 0.001).toFixed(2)),
-      high: Number((item.ZuiGao * 0.001).toFixed(2)),
-      low: Number((item.ZuiDi * 0.001).toFixed(2)),
-      close: Number((item.ShouPan * 0.001).toFixed(2)),
-      volume: item.ZongLiang,
+      open: Number((safeFloat(item.KaiPan) * 0.001).toFixed(2)),
+      high: Number((safeFloat(item.ZuiGao) * 0.001).toFixed(2)),
+      low: Number((safeFloat(item.ZuiDi) * 0.001).toFixed(2)),
+      close: Number((safeFloat(item.ShouPan) * 0.001).toFixed(2)),
+      volume: safeFloat(item.ZongLiang),
       ma5: 0,
       ma10: 0,
       ma20: 0
